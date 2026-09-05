@@ -59,6 +59,12 @@ ChatGPT`.
 
 ## Verification
 
+Hosted binary intake uses `asset.upload_url`, then an HTTP PUT of raw bytes
+with the returned headers. Never inline binary/base64 into a tool call or use
+the retired local launcher. Reuse the same permission after an uncertain PUT;
+`upload_completed` returns the existing publication, not another version.
+Discover required hosted tools by name, never by an exact tool count.
+
 Run the narrowest checks that cover the change. Common gates are:
 
 ```bash

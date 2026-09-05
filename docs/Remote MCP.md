@@ -9,9 +9,8 @@ Brunn exposes one authenticated Streamable HTTP MCP resource at:
 https://brunn.ai/mcp
 ```
 
-The same endpoint is used for ChatGPT Chat and Work. The existing local Codex
-and Aether/OpenClaw integrations remain stdio clients and are not routed
-through this gateway.
+The same hosted OAuth endpoint is used by ChatGPT, Codex, and Aether/OpenClaw.
+The former local stdio launcher is retired for these clients.
 
 ## Trust and token model
 
@@ -51,7 +50,7 @@ The gateway exposes:
 - `memory.open`, `memory.query`, `memory.read`, and `memory.changes`
 - `memory.capture`, `memory.write`, and `memory.checkpoint`
 - `memory.status`
-- `asset.list` and `asset.metadata`
+- `asset.list`, `asset.metadata`, and `asset.upload_url`
 - `briefing.publish`, `briefing.dedupe`, and `briefing.topics`
 - `document.publish` and `document.get`
 - `notification.publish`
@@ -61,6 +60,37 @@ write the MCP adapter host's filesystem; in Railway that filesystem is not the
 user's phone or computer. Text reads are capped at 120,000 characters per item
 for hosted-client result limits. The local stdio adapter also exposes the two
 filesystem-dependent tools.
+
+### Binary uploads from a client with access to the file
+
+Call `asset.upload_url` with `path`, `media_type`, `size_bytes`, and optionally
+`sha256` and `expected_version`. PUT the raw bytes to the returned `put_url`
+using **both returned headers** (`Authorization: BrunnUpload ...` and
+`Content-Type`). This is a 15-minute, path/version-bound permission, not an API
+bearer. The permission stays in a header, not URL/access logs. Never send file
+bytes or base64 through MCP. Clients without filesystem/HTTP access must use
+an upload-capable client; hosted MCP cannot read their attachments itself.
+
+The existing streaming route and object store handle the bytes. A successful
+PUT returns HTTP 201 with the actual entry reference, version, hash and size.
+Retry an uncertain PUT with the same permission: HTTP 409 `upload_completed`
+carries the published result in `error.details`. Read-only clients cannot mint.
+An existing path requires its current version; omission is create-only. An
+expired permission returns 410; size/hash mismatch returns 400; over 4 GiB
+returns 413. Expiry is checked at the start of the request, not after transfer.
+
+There is no upload table or duplicate result record. A signed grant reserves
+the eventual immutable entry-version UUID, and publication under the existing
+path lock checks that UUID plus the expected destination identity/version.
+Replays cannot publish twice, even after rename or deletion. The signing uses
+the existing server key with a dedicated JWT audience; it does not change MCP
+OAuth. A grant remains valid until expiry even if its minting credential is
+revoked meanwhile (maximum 15 minutes); account mutation locks still apply.
+
+New hosted uploads create deterministic pending companions without invoking
+the legacy paid description job. Dreamer filing and web/iOS pickers are
+separate work. Credentialed binary GET remains available; hosted `asset.fetch`
+and an agent-facing download grant are not introduced here.
 
 ## Railway deployment
 

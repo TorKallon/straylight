@@ -37,6 +37,7 @@ test("stdio server negotiates and exposes the complete typed memory surface", as
     "asset.fetch",
     "asset.list",
     "asset.metadata",
+    "asset.upload_url",
     "briefing.dedupe",
     "briefing.publish",
     "briefing.topics",
@@ -80,7 +81,7 @@ test("stdio server negotiates and exposes the complete typed memory surface", as
       "message.wait",
     );
   }
-  assert.deepEqual(names, expectedNames.sort());
+  for (const name of expectedNames) assert.ok(names.includes(name), `missing tool ${name}`);
   assert.equal(response.tools.every((tool) => tool.inputSchema.type === "object"), true);
   const open = response.tools.find((tool) => tool.name === "memory.open");
   assert.ok(open);

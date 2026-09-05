@@ -206,7 +206,7 @@ const RESUME_DELTA_SOURCE_LIMIT: usize = 8;
 const RESUME_DELTA_TOTAL_CHARS: usize = 6_000;
 const RESUME_DELTA_SOURCE_CHARS: usize = 2_000;
 const RESUME_DELTA_WHOLE_PAIR_CHARS: usize = 2_400;
-const MAX_STREAMED_BINARY_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+const MAX_STREAMED_BINARY_BYTES: u64 = crate::binary_upload::MAX_BYTES;
 const WORKSPACE_IMPORT_FORMAT: &str = "brunn-workspace-import-manifest@v1";
 const TIER_A_PORTABLE_COMPANION_FORMAT: &str = "brunn-tier-a-portable-companion@v1";
 const TIER_A_HISTORY_STAGE_FORMAT: &str = "brunn-tier-a-history-stage@v1";
@@ -337,8 +337,10 @@ pub struct BinaryVersionQuery {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct StreamingBinaryQuery {
+    #[serde(default)]
     pub path: String,
     pub media_type: Option<String>,
+    #[serde(default)]
     pub expected_content_hash: String,
     pub mtime_ns: Option<i64>,
     pub mode: Option<u32>,
@@ -2405,6 +2407,7 @@ pub async fn upload_binary(
         portable_metadata,
         expected_version,
         portable_companion,
+        None,
     )
     .await?;
     let mut envelope = WorkspaceEnvelope::complete(receipt.clone());
@@ -2431,12 +2434,44 @@ pub async fn upload_binary(
 pub async fn upload_binary_stream(
     State(state): State<AppState>,
     Extension(auth): Extension<AuthContext>,
-    Query(query): Query<StreamingBinaryQuery>,
+    grant: Option<Extension<crate::binary_upload::UploadGrant>>,
+    Query(mut query): Query<StreamingBinaryQuery>,
+    headers: axum::http::HeaderMap,
     body: Body,
-) -> ApiResult<Json<WorkspaceEnvelope<Value>>> {
-    auth.require(Capability::Stage)?;
+) -> ApiResult<(StatusCode, Json<WorkspaceEnvelope<Value>>)> {
+    let grant = grant.as_ref().map(|Extension(grant)| grant);
+    if let Some(grant) = grant {
+        // Destination and bounds come only from the signed permission, never
+        // caller-supplied query parameters on the PUT.
+        query = StreamingBinaryQuery {
+            path: grant.request.path.clone(),
+            media_type: Some(grant.request.media_type.clone()),
+            expected_content_hash: grant.request.sha256.clone().unwrap_or_default(),
+            expected_version: grant.request.expected_version,
+            mtime_ns: None,
+            mode: None,
+            provenance: None,
+        };
+        if headers
+            .get(header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            != Some(grant.request.media_type.as_str())
+        {
+            return Err(ApiError::invalid(
+                "Content-Type must match the upload permission",
+            ));
+        }
+        let mut tx = state.begin_read(&auth).await?;
+        crate::binary_upload::reject_completed(&mut tx, grant).await?;
+    } else {
+        auth.require(Capability::Stage)?;
+    }
     validate_public_path(&query.path)?;
-    let expected_content_hash = validate_sha256(&query.expected_content_hash)?;
+    let expected_content_hash = if grant.is_some() && query.expected_content_hash.is_empty() {
+        None
+    } else {
+        Some(validate_sha256(&query.expected_content_hash)?)
+    };
     let media_type = query
         .media_type
         .filter(|value| !value.trim().is_empty())
@@ -2467,6 +2502,7 @@ pub async fn upload_binary_stream(
             })?;
         let mut stream = body.into_data_stream();
         let mut size_bytes = 0_u64;
+        let mut digest = Sha256::new();
         while let Some(chunk) = stream.next().await {
             let chunk = chunk.map_err(|error| {
                 ApiError::invalid(format!("binary upload stream failed: {error}"))
@@ -2481,6 +2517,12 @@ pub async fn upload_binary_stream(
                     "workspace binary uploads are limited to 4 GiB",
                 ));
             }
+            if grant.is_some_and(|grant| size_bytes > grant.request.size_bytes) {
+                return Err(ApiError::invalid("uploaded size does not match size_bytes"));
+            }
+            if grant.is_some() && expected_content_hash.is_some() {
+                digest.update(&chunk);
+            }
             file.write_all(&chunk).await.map_err(|error| {
                 ApiError::Internal(format!("could not buffer binary upload: {error}"))
             })?;
@@ -2489,6 +2531,16 @@ pub async fn upload_binary_stream(
             ApiError::Internal(format!("could not flush binary upload: {error}"))
         })?;
         drop(file);
+        if grant.is_some_and(|grant| size_bytes != grant.request.size_bytes) {
+            return Err(ApiError::invalid("uploaded size does not match size_bytes"));
+        }
+        if grant.is_some()
+            && expected_content_hash
+                .as_ref()
+                .is_some_and(|expected| *expected != hex::encode(digest.finalize()))
+        {
+            return Err(ApiError::invalid("uploaded SHA-256 does not match sha256"));
+        }
         state
             .object_store
             .put_user_file_blob(auth.user_id, &media_type, &temporary_path)
@@ -2497,7 +2549,10 @@ pub async fn upload_binary_stream(
     .await;
     let _ = tokio::fs::remove_file(&temporary_path).await;
     let stored = transfer?;
-    if validate_sha256(&stored.sha256)? != expected_content_hash {
+    if expected_content_hash
+        .as_ref()
+        .is_some_and(|expected| stored.sha256.trim_start_matches("sha256:") != expected)
+    {
         return Err(ApiError::conflict(
             "content_hash_mismatch",
             "uploaded binary bytes changed after the caller calculated their hash",
@@ -2523,6 +2578,7 @@ pub async fn upload_binary_stream(
         Some(portable_metadata),
         query.expected_version,
         None,
+        grant,
     )
     .await?;
     let mut envelope = WorkspaceEnvelope::complete(receipt.clone());
@@ -2543,7 +2599,14 @@ pub async fn upload_binary_stream(
             stored.size_bytes,
         );
     }
-    Ok(Json(envelope))
+    Ok((
+        if grant.is_some() {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(envelope),
+    ))
 }
 
 pub async fn fetch_binary(
@@ -2792,6 +2855,7 @@ async fn commit_binary_with_companion(
     portable_metadata: Option<Value>,
     expected_version: Option<i64>,
     portable_companion: Option<PortableBinaryCompanion>,
+    upload_grant: Option<&crate::binary_upload::UploadGrant>,
 ) -> ApiResult<Value> {
     let object_version_id = object_version_id.ok_or_else(|| {
         ApiError::Internal("versioned object upload returned no exact version ID".to_owned())
@@ -2903,6 +2967,10 @@ async fn commit_binary_with_companion(
         .await?;
     }
 
+    if let Some(grant) = upload_grant {
+        crate::binary_upload::reject_completed(&mut tx, grant).await?;
+    }
+
     let existing = sqlx::query(
         r#"
         SELECT entry.id,entry.kind,entry.media_type,entry.current_version,entry.deleted_at,
@@ -2931,9 +2999,18 @@ async fn commit_binary_with_companion(
             json!({"path": path}),
         ));
     }
-    let binary_no_op = existing
-        .as_ref()
-        .is_some_and(|row| row.get::<String, _>("content_sha256") == content_sha256);
+    if let Some(grant) = upload_grant {
+        crate::binary_upload::check_target(
+            path,
+            grant.request.expected_version.unwrap_or(0),
+            grant.entry_id,
+            existing.as_ref(),
+        )?;
+    }
+    let binary_no_op = upload_grant.is_none()
+        && existing
+            .as_ref()
+            .is_some_and(|row| row.get::<String, _>("content_sha256") == content_sha256);
     if !binary_no_op && let Some(expected) = expected_version {
         let actual = existing
             .as_ref()
@@ -3048,7 +3125,11 @@ async fn commit_binary_with_companion(
                 row.get::<i64, _>("current_version") + 1,
                 "update",
             ),
-            None => (Uuid::now_v7(), 1_i64, "create"),
+            None => (
+                upload_grant.map_or_else(Uuid::now_v7, |grant| grant.entry_id),
+                1_i64,
+                "create",
+            ),
         };
         if operation == "create" {
             sqlx::query(
@@ -3066,7 +3147,7 @@ async fn commit_binary_with_companion(
             .execute(&mut *tx)
             .await?;
         }
-        let version_id = Uuid::now_v7();
+        let version_id = upload_grant.map_or_else(Uuid::now_v7, |grant| grant.version_id);
         sqlx::query(
             r#"
             INSERT INTO brunn.entry_versions (
@@ -3159,7 +3240,8 @@ async fn commit_binary_with_companion(
         } else {
             None
         };
-    let should_queue_description = portable_companion.is_none()
+    let should_queue_description = upload_grant.is_none()
+        && portable_companion.is_none()
         && supplied_description.is_none()
         && (!binary_no_op || retained_companion.is_none());
     let companion_result = match retained_companion {
@@ -8644,7 +8726,7 @@ fn validate_path(path: &str) -> ApiResult<()> {
     Ok(())
 }
 
-fn validate_public_path(path: &str) -> ApiResult<()> {
+pub(crate) fn validate_public_path(path: &str) -> ApiResult<()> {
     validate_path(path)?;
     if path.starts_with(".brunn/") {
         return Err(ApiError::invalid(
@@ -8921,7 +9003,7 @@ fn validate_idempotency_key(key: &str) -> ApiResult<()> {
     Ok(())
 }
 
-fn validate_sha256(value: &str) -> ApiResult<String> {
+pub(crate) fn validate_sha256(value: &str) -> ApiResult<String> {
     let normalized = value.trim().strip_prefix("sha256:").unwrap_or(value.trim());
     if normalized.len() != 64 || !normalized.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         return Err(ApiError::invalid(

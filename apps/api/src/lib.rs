@@ -8,6 +8,7 @@ pub mod api;
 pub mod asset_description;
 pub mod asset_profiles;
 pub mod auth;
+pub mod binary_upload;
 pub mod briefing_service;
 pub mod brunn_state_cli;
 pub mod brunn_state_export;

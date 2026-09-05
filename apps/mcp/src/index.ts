@@ -749,6 +749,23 @@ registerJsonTool(
 );
 
 registerJsonTool(
+  "asset.upload_url",
+  "Authorize one binary upload to an exact workspace path (same permission as memory.write). " +
+    "PUT the raw file bytes to put_url using the returned headers before expires_at. " +
+    "Never put file bytes or base64 in a tool call. Read the PUT JSON result and reference its entry_ref/path. " +
+    "An existing path requires its current expected_version; omission means create only. " +
+    "Retry with the SAME returned permission after an uncertain PUT; HTTP 409 upload_completed contains the published result.",
+  {
+    path: z.string().min(1).max(1024),
+    media_type: z.string().min(1).max(255),
+    size_bytes: z.number().int().nonnegative().max(4 * 1024 * 1024 * 1024),
+    sha256: z.string().regex(/^(?:sha256:)?[0-9a-f]{64}$/i).optional(),
+    expected_version: z.number().int().nonnegative().optional(),
+  },
+  (input) => client.request("POST", "/v1/uploads", input),
+);
+
+registerJsonTool(
   "asset.list",
   "List current binary workspace entries and their exact hashes, versions, sizes, and description metadata.",
   {
@@ -1298,6 +1315,7 @@ function registerJsonToolOnServer<Shape extends z.ZodRawShape>(
   // McpServer validates the raw shape before calling this function. Its generic
   // callback type does not preserve a reusable helper's Zod shape inference.
   const readOnly = !new Set([
+    "asset.upload_url",
     "document.publish",
     "memory.capture",
     "memory.write",

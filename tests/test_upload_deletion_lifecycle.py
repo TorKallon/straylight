@@ -88,7 +88,7 @@ class UploadDeletionLifecycleContractTest(unittest.TestCase):
         transfer = stream.index("let transfer = async")
         cleanup = stream.index("tokio::fs::remove_file(&temporary_path)", transfer)
         unwrap = stream.index("let stored = transfer?", cleanup)
-        hash_check = stream.index("validate_sha256(&stored.sha256)?", unwrap)
+        hash_check = stream.index('stored.sha256.trim_start_matches("sha256:")', unwrap)
         publish = stream.index("commit_binary_with_companion(", hash_check)
         self.assertLess(transfer, cleanup)
         self.assertLess(cleanup, unwrap)

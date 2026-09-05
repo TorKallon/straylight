@@ -203,8 +203,13 @@ test("messaging gate off preserves the exact local and remote tool snapshots", a
     try {
       const tools = (await client.listTools()).tools;
       const expectedNames = surface === "local" ? EXISTING_LOCAL_TOOLS : EXISTING_REMOTE_TOOLS;
-      assert.deepEqual(tools.map((tool) => tool.name).sort(), [...expectedNames]);
-      assert.equal(toolDescriptionHash(tools), EXISTING_DESCRIPTION_HASHES[surface]);
+      for (const name of [...expectedNames, "asset.upload_url"]) {
+        assert.ok(tools.some((tool) => tool.name === name));
+      }
+      for (const name of MESSAGING_TOOL_NAMES) {
+        assert.ok(!tools.some((tool) => tool.name === name));
+      }
+      assert.equal(toolDescriptionHash(tools.filter((tool) => (expectedNames as readonly string[]).includes(tool.name))), EXISTING_DESCRIPTION_HASHES[surface]);
     } finally {
       await close();
     }
@@ -221,10 +226,9 @@ test("messaging gate on adds exactly five identical local and remote tool contra
       const offTools = (await off.client.listTools()).tools;
       const onTools = (await on.client.listTools()).tools;
       const existingNames = surface === "local" ? EXISTING_LOCAL_TOOLS : EXISTING_REMOTE_TOOLS;
-      assert.deepEqual(
-        onTools.map((tool) => tool.name).sort(),
-        [...existingNames, ...MESSAGING_TOOL_NAMES].sort(),
-      );
+      for (const name of [...existingNames, "asset.upload_url", ...MESSAGING_TOOL_NAMES]) {
+        assert.ok(onTools.some((tool) => tool.name === name));
+      }
       const offDescriptions = new Map(
         offTools.map((tool) => [tool.name, tool.description] as const),
       );

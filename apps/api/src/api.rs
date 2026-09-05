@@ -34,6 +34,7 @@ pub fn router(state: AppState) -> Router {
         .route("/me", get(service::me))
         .route("/status", get(service::status))
         .route("/workspace/open", post(simple_core::open))
+        .route("/uploads", post(crate::binary_upload::mint))
         .route("/workspace/search", post(simple_core::search))
         .route("/workspace/read", post(simple_core::read))
         .route(

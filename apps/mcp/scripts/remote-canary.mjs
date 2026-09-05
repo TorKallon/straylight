@@ -2,11 +2,13 @@
 
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
+import { readFile } from "node:fs/promises";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 
 import { expectedRemoteToolNames } from "./messaging-release-profile.mjs";
+import { archiveFiles } from "./binary-upload-canary.mjs";
 
 const baseUrl = new URL(process.env.BRUNN_REMOTE_URL ?? "https://brunn.ai/");
 const resourceUrl = new URL("/mcp", baseUrl);
@@ -75,6 +77,7 @@ try {
   const requiredToolNames = expectedRemoteToolNames([
     "asset.list",
     "asset.metadata",
+    "asset.upload_url",
     "briefing.dedupe",
     "briefing.publish",
     "briefing.topics",
@@ -160,6 +163,12 @@ try {
     arguments: { session_id: sessionId },
   }));
 
+  const binaryResults = process.env.BRUNN_UPLOAD_MANIFEST
+    ? await archiveFiles(client, baseUrl, upstreamToken,
+        JSON.parse(await readFile(process.env.BRUNN_UPLOAD_MANIFEST, "utf8"))
+          .map((item) => ({...item,session_id:sessionId})))
+    : [];
+
   process.stdout.write(`${JSON.stringify({
     label,
     resource: resourceUrl.href,
@@ -172,6 +181,7 @@ try {
     replay_status: findString(replayed, "status", false),
     briefing_topics_status: findString(briefingTopics, "status", false),
     marker_verified: true,
+    verified_binaries: binaryResults,
   }, null, 2)}\n`);
 } finally {
   await client.close().catch(() => undefined);

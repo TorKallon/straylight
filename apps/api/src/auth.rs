@@ -62,6 +62,28 @@ pub async fn middleware(
     next: Next,
 ) -> Result<Response, ApiError> {
     let started = Instant::now();
+    // A scoped upload permission is accepted only at the byte boundary. It is
+    // not an API bearer and never authorizes reads or general workspace writes.
+    if let Some(token) = request
+        .headers()
+        .get(AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.strip_prefix("BrunnUpload "))
+    {
+        let path = request
+            .extensions()
+            .get::<axum::extract::OriginalUri>()
+            .map_or(request.uri().path(), |uri| uri.0.path());
+        if request.method() != Method::PUT || path != crate::binary_upload::CONTENT_ROUTE {
+            return Err(ApiError::unauthenticated());
+        }
+        let grant = crate::binary_upload::verify(&state.config.continuation_secret, token)?;
+        let auth = grant.auth();
+        state.request_rate_limiter.check(auth.credential_id.0)?;
+        request.extensions_mut().insert(auth);
+        request.extensions_mut().insert(grant);
+        return Ok(next.run(request).await);
+    }
     let bearer = request
         .headers()
         .get(AUTHORIZATION)
