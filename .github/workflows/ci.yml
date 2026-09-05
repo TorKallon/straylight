@@ -83,7 +83,7 @@ jobs:
       - name: Strict Clippy
         run: cargo clippy --all-targets --all-features -- -D warnings
       - name: Tests
-        run: cargo test --all-targets --all-features
+        run: cargo test --all-targets --all-features --no-fail-fast
       - name: Install cargo-audit
         run: cargo install cargo-audit --version 0.22.2 --locked
       - name: RustSec audit

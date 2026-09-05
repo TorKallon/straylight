@@ -1079,20 +1079,25 @@ mod database_tests {
         }
     }
 
-    async fn seed_presence(pool: &PgPool, user_id: Uuid, reported_at: DateTime<Utc>) {
-        sqlx::query(
+    async fn seed_presence(
+        pool: &PgPool,
+        user_id: Uuid,
+        reported_at: DateTime<Utc>,
+    ) -> DateTime<Utc> {
+        sqlx::query_scalar(
             r#"
             INSERT INTO brunn.location_presence(
               user_id,timezone,reported_at,last_lat,last_lon,last_accuracy_m,
               city,region,country
             ) VALUES($1,'UTC',$2,47.0,-122.0,20.0,'Seattle','Washington','United States')
+            RETURNING reported_at
             "#,
         )
         .bind(user_id)
         .bind(reported_at)
-        .execute(pool)
+        .fetch_one(pool)
         .await
-        .expect("seed prior location presence");
+        .expect("seed prior location presence")
     }
 
     async fn seed_raw_ping_with_poi(pool: &PgPool, user_id: Uuid, at: DateTime<Utc>) {
@@ -1359,9 +1364,10 @@ mod database_tests {
             return;
         };
         let (user_id, _, auth) = insert_location_principal(&pool, "month-rollback").await;
-        let as_of = Utc::now();
-        let original_presence_at = as_of - Duration::hours(3);
-        seed_presence(&pool, user_id, original_presence_at).await;
+        let as_of = "2026-09-05T18:00:00.123456789Z"
+            .parse::<DateTime<Utc>>()
+            .expect("valid nanosecond fixture timestamp");
+        let original_presence_at = seed_presence(&pool, user_id, as_of - Duration::hours(3)).await;
         let report = completed_report(as_of - Duration::minutes(1));
         let trigger = install_month_write_failure(&pool, user_id).await;
 
