@@ -36,6 +36,7 @@ jobs:
       DATABASE_URL_RW: postgres://admin:ci_only_not_a_secret@127.0.0.1:5432/brunn_test
       DATABASE_URL_RO: postgres://admin:ci_only_not_a_secret@127.0.0.1:5432/brunn_test
       DATABASE_URL_ADMIN: postgres://admin:ci_only_not_a_secret@127.0.0.1:5432/brunn_test
+      BRUNN_CONTINUATION_SIGNING_KEY: ci_only_continuation_signing_key_not_a_secret
       BRUNN_EMBEDDING_PROVIDER: hashing
       BRUNN_ALLOW_DEGRADED_EMBEDDINGS: "true"
       BRUNN_S3_ENDPOINT: http://127.0.0.1:9000
