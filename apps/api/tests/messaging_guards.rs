@@ -842,6 +842,16 @@ async fn messaging_guards_preserve_replay_budgets_rollover_and_reply_deadlines()
     )
     .await;
     let rollover_path = format!("{MESSAGING_ROOT}/conversations/{rollover_conversation}/messages");
+    let mut sender_lock = pool.begin().await.expect("hold first rollover sender");
+    let blocker_pid = sqlx::query_scalar::<_, i32>("SELECT pg_backend_pid()")
+        .fetch_one(&mut *sender_lock)
+        .await
+        .expect("read sender lock backend");
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+        .bind(format!("messaging-sender:{}:agent-a", rollover.user_id))
+        .execute(&mut *sender_lock)
+        .await
+        .expect("delay the earlier rollover request");
     let first_rollover = request_json(
         &app,
         Method::POST,
@@ -856,7 +866,28 @@ async fn messaging_guards_preserve_replay_budgets_rollover_and_reply_deadlines()
         &rollover.agent_b.token,
         text_send(901, "the other concurrent rollover send"),
     );
-    let (first_rollover, second_rollover) = tokio::join!(first_rollover, second_rollover);
+    let (first_rollover, second_rollover) = tokio::join!(first_rollover, async {
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let waiting = sqlx::query_scalar::<_, bool>(
+                    "SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1=ANY(pg_blocking_pids(pid)))",
+                )
+                .bind(blocker_pid)
+                .fetch_one(&pool)
+                .await
+                .expect("observe the first request waiting on its sender lock");
+                if waiting {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+            }
+        })
+        .await
+        .expect("first rollover request reaches its sender lock");
+        let response = second_rollover.await;
+        sender_lock.rollback().await.expect("release first sender");
+        response
+    });
     assert_eq!(first_rollover.status, StatusCode::OK, "{first_rollover:?}");
     assert_eq!(
         second_rollover.status,

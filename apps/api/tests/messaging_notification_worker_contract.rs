@@ -33,6 +33,7 @@ use brunn::{
 };
 
 const APP_ID: &str = "com.rourkem.brunn";
+static APNS_FIXTURE: Mutex<()> = Mutex::const_new(());
 
 struct PrincipalFixture {
     user_id: Uuid,
@@ -542,6 +543,7 @@ async fn conversation_notification_target_is_typed_and_fails_closed() {
 
 #[tokio::test]
 async fn conversation_apns_is_generic_prefetchable_and_conversation_collapsed() {
+    let _fixture = APNS_FIXTURE.lock().await;
     let Some((_database_url, pool)) = connect_pool().await else {
         return;
     };
@@ -588,6 +590,7 @@ async fn conversation_apns_is_generic_prefetchable_and_conversation_collapsed() 
 
 #[tokio::test]
 async fn invalid_stored_conversation_target_uses_private_notification_fallback() {
+    let _fixture = APNS_FIXTURE.lock().await;
     let Some((_database_url, pool)) = connect_pool().await else {
         return;
     };
@@ -635,6 +638,7 @@ async fn invalid_stored_conversation_target_uses_private_notification_fallback()
 
 #[tokio::test]
 async fn existing_notification_and_task_apns_contracts_are_unchanged() {
+    let _fixture = APNS_FIXTURE.lock().await;
     let Some((_database_url, pool)) = connect_pool().await else {
         return;
     };

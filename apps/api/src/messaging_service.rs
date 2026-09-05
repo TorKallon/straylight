@@ -464,7 +464,6 @@ async fn send_message(
     Json(mut input): Json<SendMessageInput>,
 ) -> ApiResult<Json<WorkspaceEnvelope<SendMessageResponse>>> {
     auth.require(Capability::MessageWrite)?;
-    let as_of = Utc::now();
     // Hash the same deadline precision that PostgreSQL persists.
     input.reply_by = input.reply_by.map(|deadline| deadline.trunc_subsecs(6));
 
@@ -543,9 +542,11 @@ async fn send_message(
         return Ok(Json(envelope));
     }
 
-    messaging_protocol::validate_send_input(&input, as_of).map_err(protocol_error)?;
     let (target_id, mut conversation) =
         load_writable_conversation_for_update(&mut tx, auth.user_id.0, conversation_id).await?;
+    // Timestamp the serialized write after following any rollover.
+    let as_of = Utc::now();
+    messaging_protocol::validate_send_input(&input, as_of).map_err(protocol_error)?;
     require_conversation_sender(&mut tx, auth.user_id.0, target_id, &sender, &conversation).await?;
     let sender_is_owner = sender.principal_kind == "owner";
     if sender_is_owner {
