@@ -29,7 +29,7 @@ ARG BRUNN_BUILD_REVISION=unknown
 LABEL org.opencontainers.image.title="Brunn PostgreSQL with pgvector" \
       org.opencontainers.image.revision="${BRUNN_BUILD_REVISION}" \
       org.opencontainers.image.version="17.10-pgvector0.8.5"
-RUN apk upgrade --no-cache libcrypto3 libssl3
+RUN apk upgrade --no-cache libcrypto3 libssl3 libuuid
 COPY --from=pgvector-build /usr/local/lib/postgresql/vector.so /usr/local/lib/postgresql/vector.so
 COPY --from=pgvector-build /usr/local/share/postgresql/extension/vector* /usr/local/share/postgresql/extension/
 COPY --from=gosu-build /out/gosu /usr/local/bin/gosu

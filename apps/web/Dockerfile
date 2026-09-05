@@ -12,7 +12,7 @@ RUN npm run build
 FROM nginxinc/nginx-unprivileged:1.30.4-alpine@sha256:45ce1e2e699234253d1def7baa96218a5d00b498d1ba0cbb1a17b6bdf73d1351
 
 USER root
-RUN apk upgrade --no-cache libexpat
+RUN apk upgrade --no-cache libexpat libuuid
 
 ARG BRUNN_BUILD_REVISION=unknown
 LABEL org.opencontainers.image.title="Brunn Control Plane" \
