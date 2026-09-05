@@ -3,7 +3,7 @@ use axum::{
     body::Body,
     http::{Method, Request, StatusCode, header},
 };
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
+use chrono::{DateTime, Duration as ChronoDuration, SubsecRound, Utc};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
@@ -1043,26 +1043,63 @@ async fn messaging_guards_preserve_replay_budgets_rollover_and_reply_deadlines()
         "Injected reply deadline",
     )
     .await;
-    let reply_by = Utc::now() + ChronoDuration::minutes(1);
+    let reply_by =
+        Utc::now().trunc_subsecs(6) + ChronoDuration::minutes(1) + ChronoDuration::nanoseconds(789);
+    let mut question_body = json!({
+        "client_key": client_key(900),
+        "kind": "question",
+        "body_md": "Reply before the injected deadline",
+        "expects_reply": true,
+        "reply_by": reply_by
+    });
     let question = request_json(
         &app,
         Method::POST,
         &format!("{MESSAGING_ROOT}/conversations/{deadline_conversation}/messages"),
         &deadline.agent.token,
-        json!({
-            "client_key": client_key(900),
-            "kind": "question",
-            "body_md": "Reply before the injected deadline",
-            "expects_reply": true,
-            "reply_by": reply_by
-        }),
+        question_body.clone(),
     )
     .await;
-    assert_eq!(question.status, StatusCode::OK);
+    assert_eq!(
+        question.status,
+        StatusCode::OK,
+        "deadline question: {:?}",
+        question.body
+    );
     let question_seq = data(&question)
         .get("seq")
         .and_then(Value::as_i64)
         .expect("deadline question returns a sequence");
+    let question_replay = request_json(
+        &app,
+        Method::POST,
+        &format!("{MESSAGING_ROOT}/conversations/{deadline_conversation}/messages"),
+        &deadline.agent.token,
+        question_body.clone(),
+    )
+    .await;
+    assert_eq!(
+        question_replay.status,
+        StatusCode::OK,
+        "nanosecond deadline replay: {:?}",
+        question_replay.body
+    );
+    assert_eq!(data(&question_replay)["duplicate"], true);
+    assert_eq!(data(&question_replay)["seq"], question_seq);
+    question_body["reply_by"] = json!(reply_by + ChronoDuration::microseconds(1));
+    let changed_deadline = request_json(
+        &app,
+        Method::POST,
+        &format!("{MESSAGING_ROOT}/conversations/{deadline_conversation}/messages"),
+        &deadline.agent.token,
+        question_body,
+    )
+    .await;
+    assert_error(
+        &changed_deadline,
+        StatusCode::CONFLICT,
+        "idempotency_conflict",
+    );
     let as_of = reply_by + ChronoDuration::seconds(1);
     assert!(
         messaging_service::process_due_reply_by(&state, as_of)

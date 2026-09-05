@@ -9,7 +9,7 @@ use axum::{
     http::{HeaderMap, StatusCode, header::AUTHORIZATION},
     routing::{get, patch, post, put},
 };
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, SubsecRound, Utc};
 use chrono_tz::Tz;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -461,10 +461,12 @@ async fn send_message(
     Extension(auth): Extension<AuthContext>,
     headers: HeaderMap,
     Path(conversation_id): Path<Uuid>,
-    Json(input): Json<SendMessageInput>,
+    Json(mut input): Json<SendMessageInput>,
 ) -> ApiResult<Json<WorkspaceEnvelope<SendMessageResponse>>> {
     auth.require(Capability::MessageWrite)?;
     let as_of = Utc::now();
+    // Hash the same deadline precision that PostgreSQL persists.
+    input.reply_by = input.reply_by.map(|deadline| deadline.trunc_subsecs(6));
 
     let started = std::time::Instant::now();
     let mut tx = state.begin_write(&auth).await?;

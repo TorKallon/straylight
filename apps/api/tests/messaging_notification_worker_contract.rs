@@ -11,7 +11,7 @@ use axum::{
     http::{Method, Request, StatusCode, header},
 };
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use chrono::{TimeZone, Utc};
+use chrono::{SubsecRound, TimeZone, Utc};
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -906,11 +906,15 @@ async fn seed_due_question(
             "kind": "question",
             "body_md": "Does the existing worker expire this question?",
             "expects_reply": true,
-            "reply_by": Utc::now() + chrono::Duration::seconds(1)
+            "reply_by": Utc::now().trunc_subsecs(6) + chrono::Duration::seconds(1) + chrono::Duration::nanoseconds(789)
         }),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "send worker contract question");
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "send worker contract question: {body}"
+    );
     let question_seq = body
         .pointer("/data/seq")
         .and_then(Value::as_i64)
